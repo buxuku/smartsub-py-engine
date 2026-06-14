@@ -1,5 +1,6 @@
 """引擎注册表。"""
 
+import importlib.util
 import logging
 
 log = logging.getLogger(__name__)
@@ -20,11 +21,12 @@ def get_engine(name):
 
 
 def list_engines():
-    available = {"faster_whisper": False}
-    try:
-        import faster_whisper  # noqa: F401
+    """只探测依赖是否可导入，不真正导入（避免重依赖拖慢 ping）。
 
-        available["faster_whisper"] = True
-    except ImportError:
-        pass
-    return available
+    find_spec 经 importlib 的 finder 查找（PyInstaller 冻结环境下走
+    PyiFrozenImporter）只定位、不执行模块，毫秒级返回；重依赖
+    （ctranslate2/av/tokenizers/onnxruntime 等）推迟到首个 transcribe 惰性加载。
+    """
+    return {
+        "faster_whisper": importlib.util.find_spec("faster_whisper") is not None,
+    }

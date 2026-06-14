@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = []
+hiddenimports = ["_version"]
 
 # faster-whisper 运行所需的全部资源(含 silero VAD onnx 资产)
 for package in ("faster_whisper", "ctranslate2", "tokenizers", "huggingface_hub", "av"):

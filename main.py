@@ -24,8 +24,7 @@ import threading
 import traceback
 
 from engines import get_engine, list_engines
-
-ENGINE_VERSION = "0.1.0"
+from _version import ENGINE_VERSION, PROTOCOL_VERSION
 
 logging.basicConfig(
     stream=sys.stderr,
@@ -66,6 +65,8 @@ def handle_ping(req_id, params):
         req_id,
         {
             "version": ENGINE_VERSION,
+            "engineVersion": ENGINE_VERSION,
+            "protocolVersion": PROTOCOL_VERSION,
             "python": sys.version.split()[0],
             "frozen": bool(getattr(sys, "frozen", False)),
             "engines": list_engines(),

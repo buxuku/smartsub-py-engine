@@ -4,3 +4,4 @@ build/
 __pycache__/
 *.pyc
 .DS_Store
+.gitcode-sync-tmp/

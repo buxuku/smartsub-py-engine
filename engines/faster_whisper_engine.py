@@ -9,6 +9,19 @@ log = logging.getLogger(__name__)
 _model_cache = {}
 _model_lock = threading.Lock()
 
+# 抗幻觉/抗重复参数透传白名单：仅当 SmartSub 显式下发时才覆盖，缺省键回落
+# faster-whisper 自身默认值，老客户端（不发这些键）行为完全不变。
+_ADVANCED_KEYS = (
+    "condition_on_previous_text",
+    "repetition_penalty",
+    "no_repeat_ngram_size",
+    "compression_ratio_threshold",
+    "log_prob_threshold",
+    "no_speech_threshold",
+    "hallucination_silence_threshold",
+    "temperature",
+)
+
 
 def _load_faster_whisper():
     try:
@@ -63,6 +76,13 @@ def transcribe(params, emit_event, is_cancelled):
     if language in (None, "", "auto"):
         language = None
 
+    # max_speech_duration_s：SmartSub 传 0 表示「不限制」，映射为 faster-whisper 的 inf
+    # （JSON 无法承载 inf，故在此本地转换）。samples_overlap 是 whisper.cpp 专有项，
+    # faster-whisper 的 VadOptions 不支持，故不接收。
+    max_speech = float(params.get("vad_max_speech_duration_s") or 0)
+    # 仅透传 SmartSub 显式给出的抗幻觉/抗重复参数，其余回落 faster-whisper 默认。
+    extra = {k: params[k] for k in _ADVANCED_KEYS if params.get(k) is not None}
+
     emit_event("progress", {"percent": 0})
     segments_iter, info = model.transcribe(
         audio_file,
@@ -73,9 +93,11 @@ def transcribe(params, emit_event, is_cancelled):
         vad_parameters={
             "threshold": float(params.get("vad_threshold", 0.5)),
             "min_speech_duration_ms": int(params.get("vad_min_speech_duration_ms", 250)),
+            "max_speech_duration_s": max_speech if max_speech > 0 else float("inf"),
             "min_silence_duration_ms": int(params.get("vad_min_silence_duration_ms", 100)),
             "speech_pad_ms": int(params.get("vad_speech_pad_ms", 30)),
         },
+        **extra,
     )
 
     total = float(info.duration or 0) or None

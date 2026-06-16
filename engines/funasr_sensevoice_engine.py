@@ -48,20 +48,37 @@ def _build_recognizer(sherpa_onnx, params):
     if not asr_model or not tokens:
         raise EngineError("invalid_params", "asr_model and tokens are required")
 
+    model_type = params.get("model_type") or "sense_voice"
+    num_threads = int(params.get("num_threads", 2))
+    provider = params.get("provider") or "cpu"
+
+    if model_type == "paraformer":
+        return sherpa_onnx.OfflineRecognizer.from_paraformer(
+            paraformer=asr_model,
+            tokens=tokens,
+            num_threads=num_threads,
+            sample_rate=TARGET_SAMPLE_RATE,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            provider=provider,
+            debug=False,
+        )
+
     return sherpa_onnx.OfflineRecognizer.from_sense_voice(
         model=asr_model,
         tokens=tokens,
-        num_threads=int(params.get("num_threads", 2)),
+        num_threads=num_threads,
         sample_rate=TARGET_SAMPLE_RATE,
         use_itn=bool(params.get("use_itn", True)),
         language=_normalize_language(params.get("language")),
-        provider=params.get("provider") or "cpu",
+        provider=provider,
         debug=False,
     )
 
 
 def _get_recognizer(sherpa_onnx, params):
     key = (
+        params.get("model_type") or "sense_voice",
         params.get("asr_model"),
         params.get("tokens"),
         int(params.get("num_threads", 2)),

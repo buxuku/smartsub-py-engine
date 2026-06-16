@@ -19,6 +19,7 @@
 
 import json
 import logging
+import os
 import sys
 import threading
 import traceback
@@ -33,6 +34,29 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+
+def _make_protocol_stream():
+    """保护协议 stdout 不被原生库污染。
+
+    把真正的 stdout(fd 1) dup 出来专供 JSON 协议消息，随后把 fd 1 重定向到
+    stderr(fd 2)。这样任何原生库（典型如 onnxruntime / sherpa-onnx 首次初始化）
+    写到 fd 1 的诊断信息都会落到 stderr 当作日志排掉，绝不污染协议流。
+
+    背景:Windows 上 sherpa-onnx 首个 transcribe 初始化会向 stdout 打印信息,
+    污染首条结果行导致 Electron 端 JSON 解析失败、任务永久卡死(取消重试因二次
+    初始化不再有该输出而恢复正常)。把协议流与 fd 1 解耦后该问题根除。
+    """
+    try:
+        protocol_fd = os.dup(1)
+        os.dup2(2, 1)
+        return os.fdopen(protocol_fd, "w", encoding="utf-8", newline="\n")
+    except (OSError, ValueError):  # 极少数平台 dup 失败时退回原 stdout，至少保持可用
+        return sys.stdout
+
+
+# 必须在任何原生库加载（首个 transcribe/preload 的 worker 线程内）之前完成。
+_protocol_out = _make_protocol_stream()
+
 _stdout_lock = threading.Lock()
 # 进行中请求的取消标记: request_id -> threading.Event
 _cancel_events = {}
@@ -41,11 +65,11 @@ _shutdown = threading.Event()
 
 
 def emit(message):
-    """线程安全地向 stdout 写出一条协议消息。"""
+    """线程安全地向受保护的协议流写出一条消息（绕开被原生库污染的 fd 1）。"""
     line = json.dumps(message, ensure_ascii=False)
     with _stdout_lock:
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
+        _protocol_out.write(line + "\n")
+        _protocol_out.flush()
 
 
 def emit_event(method, params):

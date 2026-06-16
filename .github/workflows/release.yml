@@ -57,10 +57,46 @@ jobs:
           path: smartsub-${{ matrix.engine_id }}-${{ matrix.target.artifact_suffix }}.tar.gz
           if-no-files-found: error
 
+  # Layer 1: 可下载的 Python 基座（与 App 内置基座同源/同布局）。
+  # 每个目标在其原生 runner 上构建（host == target），macOS 上做 ad-hoc 签名。
+  build_base:
+    name: base ${{ matrix.target.artifact_suffix }}
+    runs-on: ${{ matrix.target.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { os: macos-latest, artifact_suffix: macos-arm64 }
+          - { os: macos-15-intel, artifact_suffix: macos-x64 }
+          - { os: windows-2022, artifact_suffix: windows-x64 }
+          - { os: ubuntu-22.04, artifact_suffix: linux-x64 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install pinned Python
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Build relocatable base (uv PBS + trim + adhoc-sign)
+        run: uv run --python ${{ env.PYTHON_VERSION }} -- python build_base_package.py dist/py-base
+
+      - name: Archive (contents at top level, no wrapper dir)
+        shell: bash
+        run: tar -czf smartsub-base-${{ matrix.target.artifact_suffix }}.tar.gz -C dist/py-base .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: py-base-${{ matrix.target.artifact_suffix }}
+          path: smartsub-base-${{ matrix.target.artifact_suffix }}.tar.gz
+          if-no-files-found: error
+
   publish_latest:
     name: Publish latest Release
     runs-on: ubuntu-latest
-    needs: build_engine
+    needs: [build_engine, build_base]
     permissions:
       contents: write
     steps:
@@ -105,6 +141,19 @@ jobs:
                   }
               return out
 
+          def base_artifacts():
+              out = {}
+              for suf in suffixes:
+                  fname = f"smartsub-base-{suf}.tar.gz"
+                  if not os.path.exists(fname):
+                      continue
+                  data = open(fname, "rb").read()
+                  out[suf] = {
+                      "sizeBytes": len(data),
+                      "sha256": hashlib.sha256(data).hexdigest(),
+                  }
+              return out
+
           per_engine = {}
           engines_present = []
           for eid, sidecar in engine_sidecar.items():
@@ -132,6 +181,13 @@ jobs:
                       "artifacts": arts,
                   }
                   for eid, arts in per_engine.items()
+              },
+              # Layer 1：可下载基座包（按平台 artifacts），App 侧下载到
+              # userData/py-base/current 覆盖内置基座。
+              "basePackage": {
+                  "pythonVersion": python_version,
+                  "pythonAbi": "cp312",
+                  "artifacts": base_artifacts(),
               },
           }
           json.dump(manifest, open("manifest.json", "w"), indent=2)

@@ -63,6 +63,32 @@ _stdout_lock = threading.Lock()
 _cancel_events = {}
 _cancel_lock = threading.Lock()
 _shutdown = threading.Event()
+# [DIAG/FIX] 已在主线程完成重依赖导入/模型构造的引擎集合。首个 transcribe 时在主线程
+# 预热，规避 worker 线程首次原生 import 在 Windows 上的 loader-lock 死锁。
+_warmed_engines = set()
+
+
+def _warmup_engine_on_main_thread(engine_name, params):
+    """在主线程完成重依赖导入(+模型构造)，并逐模块打日志定位卡点。仅首次执行。"""
+    if engine_name in _warmed_engines:
+        return
+    log.info("[DIAG] main-thread warmup begin for %s (thread=%s)",
+             engine_name, threading.current_thread().name)
+    try:
+        engine = get_engine(engine_name)
+        warm = getattr(engine, "warmup_imports", None)
+        if warm:
+            warm()
+        # import 通过后，再在主线程完成模型构造(若构造也涉及 loader-lock/OpenMP 一并规避)。
+        preload = getattr(engine, "preload", None)
+        if preload:
+            log.info("[DIAG] main-thread preload (import+construct) begin")
+            preload(params)
+            log.info("[DIAG] main-thread preload done")
+        _warmed_engines.add(engine_name)
+        log.info("[DIAG] main-thread warmup end OK for %s", engine_name)
+    except Exception as exc:  # noqa: BLE001 - 预热失败不致命，worker 会复现并把错误回传客户端
+        log.warning("[DIAG] main-thread warmup error (non-fatal): %r", exc)
 
 
 def emit(message):
@@ -121,6 +147,10 @@ def handle_transcribe(req_id, params):
     cancel_event = threading.Event()
     with _cancel_lock:
         _cancel_events[req_id] = cancel_event
+
+    # [DIAG/FIX] 首个 transcribe 在主线程预热(import + 构造)，规避 Windows worker
+    # 线程首次原生 import 的 loader-lock 死锁；逐模块日志定位卡点。后续命中缓存即时返回。
+    _warmup_engine_on_main_thread(params.get("engine", "faster_whisper"), params)
 
     def worker():
         log.info("[DIAG] transcribe worker thread started id=%s", req_id)

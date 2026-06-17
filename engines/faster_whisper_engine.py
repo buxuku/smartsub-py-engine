@@ -62,6 +62,30 @@ def _diag_probe_cuda():
         )
 
 
+_WARMUP_MODULES = ("numpy", "ctranslate2", "tokenizers", "av", "onnxruntime", "faster_whisper")
+
+
+def warmup_imports():
+    """[DIAG/FIX] 逐个导入重依赖原生模块（在调用线程内）。
+
+    - 诊断：逐模块打日志，定位 Windows 首次 import 到底卡在哪个原生库（.pyd/.dll）。
+    - 修复验证：由主线程调用，规避 worker 线程首次加载原生扩展可能触发的
+      Windows loader-lock 死锁（DllMain 在非主线程内建线程/取锁等待）。
+    """
+    for mod in _WARMUP_MODULES:
+        log.info(
+            "[DIAG] importing %s ... (thread=%s)",
+            mod,
+            threading.current_thread().name,
+        )
+        t0 = time.time()
+        try:
+            __import__(mod)
+            log.info("[DIAG] imported %s OK (%sms)", mod, int((time.time() - t0) * 1000))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[DIAG] import %s FAILED: %r", mod, exc)
+
+
 def _load_faster_whisper():
     log.info("[DIAG] before 'import faster_whisper' (first heavy native import)")
     t0 = time.time()

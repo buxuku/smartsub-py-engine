@@ -1,0 +1,36 @@
+name: sherpa-libs
+
+# 把 sherpa-onnx-node 的各平台原生库重打包为 release 资产，供主仓 SmartSub
+# 按需下载到 userData（不再依赖 Python sidecar 运行 FunASR）。
+on:
+  workflow_dispatch:
+    inputs:
+      sherpaVersion:
+        description: 'sherpa-onnx-node version'
+        required: true
+        default: '1.13.2'
+
+jobs:
+  pack:
+    strategy:
+      matrix:
+        platformKey:
+          - darwin-arm64
+          - darwin-x64
+          - win-x64
+          - win-ia32
+          - linux-x64
+          - linux-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node scripts/pack_sherpa_libs.mjs ${{ matrix.platformKey }} ${{ inputs.sherpaVersion }} ./out
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sherpa-libs-latest
+          files: |
+            ./out/smartsub-sherpa-onnx-${{ matrix.platformKey }}-${{ inputs.sherpaVersion }}.tar.gz
+            ./out/smartsub-sherpa-onnx-${{ matrix.platformKey }}-${{ inputs.sherpaVersion }}.tar.gz.sha256

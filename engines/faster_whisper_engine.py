@@ -24,71 +24,36 @@ _ADVANCED_KEYS = (
 )
 
 
-def _diag_probe_cuda():
-    """[DIAG] 带超时探测 ctranslate2 的 CUDA 设备数。
-
-    若该调用本身卡住（疑似 Windows 首次转写卡死的根因：device=auto 会先做此探测），
-    8s 后记录超时并放行；探测线程为 daemon，不阻塞主转写流程。
-    """
-    result = {}
-
-    def _probe():
-        try:
-            import ctranslate2  # noqa: PLC0415
-
-            result["version"] = getattr(ctranslate2, "__version__", "?")
-            t0 = time.time()
-            result["count"] = ctranslate2.get_cuda_device_count()
-            result["ms"] = int((time.time() - t0) * 1000)
-        except Exception as exc:  # noqa: BLE001
-            result["error"] = repr(exc)
-
-    th = threading.Thread(target=_probe, name="diag-cuda-probe", daemon=True)
-    th.start()
-    th.join(timeout=8.0)
-    if th.is_alive():
-        log.warning(
-            "[DIAG] ctranslate2.get_cuda_device_count() DID NOT RETURN within 8s "
-            "-> very likely the Windows first-transcribe hang root cause (device=auto probes CUDA)"
-        )
-    elif "error" in result:
-        log.info("[DIAG] cuda probe error: %s", result["error"])
-    else:
-        log.info(
-            "[DIAG] ctranslate2 version=%s cuda_device_count=%s (probe %sms)",
-            result.get("version"),
-            result.get("count"),
-            result.get("ms"),
-        )
-
-
+# 首次导入这些重原生扩展（含各自的 OpenMP/线程池初始化）必须在主线程完成：
+# Windows 上若首次 import 发生在 worker 线程，DllMain 内建线程会与进程级 loader
+# lock 互相等死。faster-whisper 会惰性 import onnxruntime(VAD)/av 等，故这里显式
+# 列出，确保它们都在主线程预热；worker 线程随后只命中 sys.modules 缓存。
 _WARMUP_MODULES = ("numpy", "ctranslate2", "tokenizers", "av", "onnxruntime", "faster_whisper")
 
 
 def warmup_imports():
-    """[DIAG/FIX] 逐个导入重依赖原生模块（在调用线程内）。
+    """在主线程预导入重原生依赖（仅加载 DLL，不构造模型）。
 
-    - 诊断：逐模块打日志，定位 Windows 首次 import 到底卡在哪个原生库（.pyd/.dll）。
-    - 修复验证：由主线程调用，规避 worker 线程首次加载原生扩展可能触发的
-      Windows loader-lock 死锁（DllMain 在非主线程内建线程/取锁等待）。
+    规避 Windows 上 worker 线程首次原生 import 触发的 loader-lock 死锁。
     """
+    t_all = time.time()
+    timings = []
     for mod in _WARMUP_MODULES:
-        log.info(
-            "[DIAG] importing %s ... (thread=%s)",
-            mod,
-            threading.current_thread().name,
-        )
         t0 = time.time()
         try:
             __import__(mod)
-            log.info("[DIAG] imported %s OK (%sms)", mod, int((time.time() - t0) * 1000))
+            timings.append("%s=%dms" % (mod, int((time.time() - t0) * 1000)))
         except Exception as exc:  # noqa: BLE001
-            log.warning("[DIAG] import %s FAILED: %r", mod, exc)
+            timings.append("%s=ERR" % mod)
+            log.warning("warmup import %s failed: %r", mod, exc)
+    log.info(
+        "warmup: preloaded native modules on main thread (%s) total=%dms",
+        " ".join(timings),
+        int((time.time() - t_all) * 1000),
+    )
 
 
 def _load_faster_whisper():
-    log.info("[DIAG] before 'import faster_whisper' (first heavy native import)")
-    t0 = time.time()
     try:
         from faster_whisper import WhisperModel  # noqa: PLC0415 - 惰性加载重依赖
     except ImportError as exc:
@@ -96,10 +61,6 @@ def _load_faster_whisper():
             "engine_not_installed",
             "faster-whisper is not installed: %s" % exc,
         )
-    log.info(
-        "[DIAG] after 'import faster_whisper' OK (%sms)",
-        int((time.time() - t0) * 1000),
-    )
     return WhisperModel
 
 
@@ -108,19 +69,14 @@ def _get_model(model, device, compute_type, download_root=None):
     with _model_lock:
         if key not in _model_cache:
             WhisperModel = _load_faster_whisper()
-            _diag_probe_cuda()
             kwargs = {"device": device, "compute_type": compute_type}
             if download_root:
                 kwargs["download_root"] = download_root
-            log.info(
-                "[DIAG] before WhisperModel() construct: model=%s device=%s compute_type=%s",
-                model, device, compute_type,
-            )
             t0 = time.time()
             _model_cache[key] = WhisperModel(model, **kwargs)
             log.info(
-                "[DIAG] after WhisperModel() construct OK (%sms)",
-                int((time.time() - t0) * 1000),
+                "model constructed: model=%s device=%s compute_type=%s (%dms)",
+                model, device, compute_type, int((time.time() - t0) * 1000),
             )
         return _model_cache[key]
 
@@ -138,12 +94,6 @@ def preload(params):
 
 
 def transcribe(params, emit_event, is_cancelled):
-    log.info(
-        "[DIAG] transcribe() entered on thread=%s device=%s compute_type=%s",
-        threading.current_thread().name,
-        params.get("device"),
-        params.get("compute_type"),
-    )
     audio_file = params.get("audio_file")
     if not audio_file:
         raise EngineError("invalid_params", "audio_file is required")
@@ -154,7 +104,6 @@ def transcribe(params, emit_event, is_cancelled):
         params.get("compute_type", "auto"),
         params.get("download_root"),
     )
-    log.info("[DIAG] model ready; about to call model.transcribe()")
 
     language = params.get("language")
     if language in (None, "", "auto"):
@@ -184,19 +133,10 @@ def transcribe(params, emit_event, is_cancelled):
         **extra,
     )
 
-    log.info(
-        "[DIAG] model.transcribe() returned; language=%s duration=%s; iterating segments "
-        "(first iteration triggers encoder/inference)...",
-        info.language,
-        info.duration,
-    )
+    log.info("transcribe started: language=%s duration=%s", info.language, info.duration)
     total = float(info.duration or 0) or None
     segments = []
-    _diag_first = True
     for seg in segments_iter:
-        if _diag_first:
-            log.info("[DIAG] first segment produced: start=%s end=%s", seg.start, seg.end)
-            _diag_first = False
         if is_cancelled():
             return None
         segment = {"start": seg.start, "end": seg.end, "text": seg.text}

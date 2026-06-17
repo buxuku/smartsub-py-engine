@@ -56,39 +56,33 @@ def _make_protocol_stream():
 
 # 必须在任何原生库加载（首个 transcribe/preload 的 worker 线程内）之前完成。
 _protocol_out = _make_protocol_stream()
-log.info("[DIAG] protocol stream isolated via dup(1)+dup2(2,1); logging on stderr")
+log.info("protocol stream isolated (fd1 duplicated for protocol, fd1->stderr for logs)")
 
 _stdout_lock = threading.Lock()
 # 进行中请求的取消标记: request_id -> threading.Event
 _cancel_events = {}
 _cancel_lock = threading.Lock()
 _shutdown = threading.Event()
-# [DIAG/FIX] 已在主线程完成重依赖导入/模型构造的引擎集合。首个 transcribe 时在主线程
-# 预热，规避 worker 线程首次原生 import 在 Windows 上的 loader-lock 死锁。
+# 已在主线程预热过原生 import 的引擎集合（首个 transcribe 时执行，仅一次）。
 _warmed_engines = set()
 
 
-def _warmup_engine_on_main_thread(engine_name, params):
-    """在主线程完成重依赖导入(+模型构造)，并逐模块打日志定位卡点。仅首次执行。"""
+def _warmup_engine_on_main_thread(engine_name):
+    """首个 transcribe 前在主线程预导入引擎的重原生依赖（仅 import，不构造模型）。
+
+    规避 Windows 上 worker 线程首次原生 import 的 loader-lock 死锁；模型构造仍在
+    worker 线程完成（构造不再加载新 DLL，不触发 loader lock）。仅首次执行。
+    """
     if engine_name in _warmed_engines:
         return
-    log.info("[DIAG] main-thread warmup begin for %s (thread=%s)",
-             engine_name, threading.current_thread().name)
     try:
         engine = get_engine(engine_name)
         warm = getattr(engine, "warmup_imports", None)
         if warm:
             warm()
-        # import 通过后，再在主线程完成模型构造(若构造也涉及 loader-lock/OpenMP 一并规避)。
-        preload = getattr(engine, "preload", None)
-        if preload:
-            log.info("[DIAG] main-thread preload (import+construct) begin")
-            preload(params)
-            log.info("[DIAG] main-thread preload done")
         _warmed_engines.add(engine_name)
-        log.info("[DIAG] main-thread warmup end OK for %s", engine_name)
     except Exception as exc:  # noqa: BLE001 - 预热失败不致命，worker 会复现并把错误回传客户端
-        log.warning("[DIAG] main-thread warmup error (non-fatal): %r", exc)
+        log.warning("main-thread warmup error (non-fatal): %r", exc)
 
 
 def emit(message):
@@ -148,16 +142,14 @@ def handle_transcribe(req_id, params):
     with _cancel_lock:
         _cancel_events[req_id] = cancel_event
 
-    # [DIAG/FIX] 首个 transcribe 在主线程预热(import + 构造)，规避 Windows worker
-    # 线程首次原生 import 的 loader-lock 死锁；逐模块日志定位卡点。后续命中缓存即时返回。
-    _warmup_engine_on_main_thread(params.get("engine", "faster_whisper"), params)
+    # 首个 transcribe 前在主线程预热原生 import，规避 Windows worker 线程首次原生
+    # import 的 loader-lock 死锁（模型构造仍在下面的 worker 线程完成）。
+    _warmup_engine_on_main_thread(params.get("engine", "faster_whisper"))
 
     def worker():
-        log.info("[DIAG] transcribe worker thread started id=%s", req_id)
         engine_name = params.get("engine", "faster_whisper")
         try:
             engine = get_engine(engine_name)
-            log.info("[DIAG] engine resolved (%s); calling engine.transcribe()", engine_name)
             result = engine.transcribe(
                 params,
                 emit_event=lambda method, p: emit_event(method, dict(p, id=req_id)),
@@ -198,7 +190,7 @@ def dispatch(message):
     method = message.get("method")
     params = message.get("params") or {}
     req_id = message.get("id")
-    log.info("[DIAG] dispatch method=%s id=%s", method, req_id)
+    log.info("dispatch method=%s id=%s", method, req_id)
 
     if method == "shutdown":
         _shutdown.set()

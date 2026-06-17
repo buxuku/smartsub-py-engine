@@ -27,10 +27,6 @@ SYNC_FILES=(
   "smartsub-faster-whisper-macos-arm64.tar.gz"
   "smartsub-faster-whisper-macos-x64.tar.gz"
   "smartsub-faster-whisper-linux-x64.tar.gz"
-  "smartsub-funasr-windows-x64.tar.gz"
-  "smartsub-funasr-macos-arm64.tar.gz"
-  "smartsub-funasr-macos-x64.tar.gz"
-  "smartsub-funasr-linux-x64.tar.gz"
   "manifest.json"
   "checksums.sha256"
 )

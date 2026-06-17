@@ -11,8 +11,11 @@ on:
         default: '1.13.2'
 
 jobs:
+  # 各平台只下载 npm 平台子包并重打包（npm pack 跨平台、无需编译器），
+  # 产物上传为 artifact，统一交给 publish 一次性发布，避免多 job 并发抢建同一 release。
   pack:
     strategy:
+      fail-fast: false
       matrix:
         platformKey:
           - darwin-arm64
@@ -28,9 +31,33 @@ jobs:
         with:
           node-version: '20'
       - run: node scripts/pack_sherpa_libs.mjs ${{ matrix.platformKey }} ${{ inputs.sherpaVersion }} ./out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-${{ matrix.platformKey }}
+          path: |
+            ./out/smartsub-sherpa-onnx-${{ matrix.platformKey }}-${{ inputs.sherpaVersion }}.tar.gz
+            ./out/smartsub-sherpa-onnx-${{ matrix.platformKey }}-${{ inputs.sherpaVersion }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Reset release (delete + recreate so assets always update)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete sherpa-libs-latest --yes --cleanup-tag --repo ${{ github.repository }} || true
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: sherpa-libs-latest
-          files: |
-            ./out/smartsub-sherpa-onnx-${{ matrix.platformKey }}-${{ inputs.sherpaVersion }}.tar.gz
-            ./out/smartsub-sherpa-onnx-${{ matrix.platformKey }}-${{ inputs.sherpaVersion }}.tar.gz.sha256
+          name: sherpa-libs
+          body: |
+            sherpa-onnx-node 各平台原生运行库（sherpa-onnx.node + onnxruntime/sherpa dylib/so/dll）。
+            SmartSub 按需下载到 userData/sherpa-onnx/current，用于 FunASR(sherpa) 转写。
+          files: artifacts/*

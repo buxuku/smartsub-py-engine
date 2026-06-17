@@ -4,7 +4,7 @@
 用法（需 PATH 上有 uv，且当前解释器即目标 3.12）：
   uv run --python 3.12.10 -- python build_engine_package.py <OUT_DIR> <ENGINE_ID>
 
-ENGINE_ID ∈ {faster-whisper, funasr}；读取 requirements-<ENGINE_ID>.txt。
+ENGINE_ID ∈ {faster-whisper}；读取 requirements-<ENGINE_ID>.txt。
 产物布局（OUT_DIR）：
   main.py, _version.py, engines/, site-packages/<deps...>
 
@@ -18,11 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 # 每个引擎产物必须存在的顶层 site-packages 包（构建期断言，防止 requirements 写错）
+# funasr 已迁移到 App 侧 sherpa-onnx-node 原生库（见 sherpa-libs.yml），不再在此构建。
 ENGINE_ASSERT_PKG = {
     "faster-whisper": "faster_whisper",
-    # funasr 引擎实际用 sherpa-onnx 跑 SenseVoice（torch-free、体积极小），
-    # 引擎对外标识仍为 funasr（与 App 侧 engineId/sidecar 名一致）。
-    "funasr": "sherpa_onnx",
 }
 
 

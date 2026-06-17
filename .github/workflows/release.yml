@@ -2,7 +2,7 @@ name: Release smartsub-engine
 
 # 构建并发布到 rolling `latest` Release，供 SmartSub 按需下载。
 # 产物为可重定位引擎包(main.py + site-packages/)，由 App 侧 PBS 基座 + PYTHONPATH 加载。
-# 产物名按引擎区分(smartsub-<engineId>-<suffix>.tar.gz)，便于后续多引擎(funasr/qwen)共存同一 release。
+# 产物名按引擎区分(smartsub-<engineId>-<suffix>.tar.gz)，便于后续多引擎(如 qwen)共存同一 release。
 on:
   workflow_dispatch:
   push:
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine_id: [faster-whisper, funasr]
+        engine_id: [faster-whisper]
         target:
           - { os: macos-latest, artifact_suffix: macos-arm64 }
           - { os: macos-15-intel, artifact_suffix: macos-x64 }
@@ -125,7 +125,8 @@ jobs:
           import json, os, sys, hashlib
           engine_version, protocol_version, built_at, git_sha, python_version = sys.argv[1:6]
           # engineId -> sidecar engine key（list_engines 名），决定 manifest.engines。
-          engine_sidecar = {"faster-whisper": "faster_whisper", "funasr": "funasr"}
+          # funasr 已迁移到 App 侧 sherpa-onnx-node 原生库（见 sherpa-libs.yml）。
+          engine_sidecar = {"faster-whisper": "faster_whisper"}
           suffixes = ["windows-x64", "macos-arm64", "macos-x64", "linux-x64"]
 
           def artifacts_for(engine_id):

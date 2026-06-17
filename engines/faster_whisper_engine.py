@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 
 from engines import EngineError
 
@@ -23,16 +24,59 @@ _ADVANCED_KEYS = (
 )
 
 
+def _diag_probe_cuda():
+    """[DIAG] 带超时探测 ctranslate2 的 CUDA 设备数。
+
+    若该调用本身卡住（疑似 Windows 首次转写卡死的根因：device=auto 会先做此探测），
+    8s 后记录超时并放行；探测线程为 daemon，不阻塞主转写流程。
+    """
+    result = {}
+
+    def _probe():
+        try:
+            import ctranslate2  # noqa: PLC0415
+
+            result["version"] = getattr(ctranslate2, "__version__", "?")
+            t0 = time.time()
+            result["count"] = ctranslate2.get_cuda_device_count()
+            result["ms"] = int((time.time() - t0) * 1000)
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = repr(exc)
+
+    th = threading.Thread(target=_probe, name="diag-cuda-probe", daemon=True)
+    th.start()
+    th.join(timeout=8.0)
+    if th.is_alive():
+        log.warning(
+            "[DIAG] ctranslate2.get_cuda_device_count() DID NOT RETURN within 8s "
+            "-> very likely the Windows first-transcribe hang root cause (device=auto probes CUDA)"
+        )
+    elif "error" in result:
+        log.info("[DIAG] cuda probe error: %s", result["error"])
+    else:
+        log.info(
+            "[DIAG] ctranslate2 version=%s cuda_device_count=%s (probe %sms)",
+            result.get("version"),
+            result.get("count"),
+            result.get("ms"),
+        )
+
+
 def _load_faster_whisper():
+    log.info("[DIAG] before 'import faster_whisper' (first heavy native import)")
+    t0 = time.time()
     try:
         from faster_whisper import WhisperModel  # noqa: PLC0415 - 惰性加载重依赖
-
-        return WhisperModel
     except ImportError as exc:
         raise EngineError(
             "engine_not_installed",
             "faster-whisper is not installed: %s" % exc,
         )
+    log.info(
+        "[DIAG] after 'import faster_whisper' OK (%sms)",
+        int((time.time() - t0) * 1000),
+    )
+    return WhisperModel
 
 
 def _get_model(model, device, compute_type, download_root=None):
@@ -40,11 +84,20 @@ def _get_model(model, device, compute_type, download_root=None):
     with _model_lock:
         if key not in _model_cache:
             WhisperModel = _load_faster_whisper()
+            _diag_probe_cuda()
             kwargs = {"device": device, "compute_type": compute_type}
             if download_root:
                 kwargs["download_root"] = download_root
-            log.info("loading model %s device=%s compute_type=%s", model, device, compute_type)
+            log.info(
+                "[DIAG] before WhisperModel() construct: model=%s device=%s compute_type=%s",
+                model, device, compute_type,
+            )
+            t0 = time.time()
             _model_cache[key] = WhisperModel(model, **kwargs)
+            log.info(
+                "[DIAG] after WhisperModel() construct OK (%sms)",
+                int((time.time() - t0) * 1000),
+            )
         return _model_cache[key]
 
 
@@ -61,6 +114,12 @@ def preload(params):
 
 
 def transcribe(params, emit_event, is_cancelled):
+    log.info(
+        "[DIAG] transcribe() entered on thread=%s device=%s compute_type=%s",
+        threading.current_thread().name,
+        params.get("device"),
+        params.get("compute_type"),
+    )
     audio_file = params.get("audio_file")
     if not audio_file:
         raise EngineError("invalid_params", "audio_file is required")
@@ -71,6 +130,7 @@ def transcribe(params, emit_event, is_cancelled):
         params.get("compute_type", "auto"),
         params.get("download_root"),
     )
+    log.info("[DIAG] model ready; about to call model.transcribe()")
 
     language = params.get("language")
     if language in (None, "", "auto"):
@@ -100,9 +160,19 @@ def transcribe(params, emit_event, is_cancelled):
         **extra,
     )
 
+    log.info(
+        "[DIAG] model.transcribe() returned; language=%s duration=%s; iterating segments "
+        "(first iteration triggers encoder/inference)...",
+        info.language,
+        info.duration,
+    )
     total = float(info.duration or 0) or None
     segments = []
+    _diag_first = True
     for seg in segments_iter:
+        if _diag_first:
+            log.info("[DIAG] first segment produced: start=%s end=%s", seg.start, seg.end)
+            _diag_first = False
         if is_cancelled():
             return None
         segment = {"start": seg.start, "end": seg.end, "text": seg.text}

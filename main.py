@@ -56,6 +56,7 @@ def _make_protocol_stream():
 
 # 必须在任何原生库加载（首个 transcribe/preload 的 worker 线程内）之前完成。
 _protocol_out = _make_protocol_stream()
+log.info("[DIAG] protocol stream isolated via dup(1)+dup2(2,1); logging on stderr")
 
 _stdout_lock = threading.Lock()
 # 进行中请求的取消标记: request_id -> threading.Event
@@ -122,9 +123,11 @@ def handle_transcribe(req_id, params):
         _cancel_events[req_id] = cancel_event
 
     def worker():
+        log.info("[DIAG] transcribe worker thread started id=%s", req_id)
         engine_name = params.get("engine", "faster_whisper")
         try:
             engine = get_engine(engine_name)
+            log.info("[DIAG] engine resolved (%s); calling engine.transcribe()", engine_name)
             result = engine.transcribe(
                 params,
                 emit_event=lambda method, p: emit_event(method, dict(p, id=req_id)),
@@ -165,6 +168,7 @@ def dispatch(message):
     method = message.get("method")
     params = message.get("params") or {}
     req_id = message.get("id")
+    log.info("[DIAG] dispatch method=%s id=%s", method, req_id)
 
     if method == "shutdown":
         _shutdown.set()

@@ -23,14 +23,10 @@ GITCODE_DRY_RUN="${GITCODE_DRY_RUN:-0}"
 UPLOAD_PUT_TIMEOUT="${UPLOAD_PUT_TIMEOUT:-1800}"
 
 SYNC_FILES=(
-  "smartsub-faster-whisper-windows-x64.tar.gz"
-  "smartsub-faster-whisper-macos-arm64.tar.gz"
-  "smartsub-faster-whisper-macos-x64.tar.gz"
-  "smartsub-faster-whisper-linux-x64.tar.gz"
-  "smartsub-funasr-windows-x64.tar.gz"
-  "smartsub-funasr-macos-arm64.tar.gz"
-  "smartsub-funasr-macos-x64.tar.gz"
-  "smartsub-funasr-linux-x64.tar.gz"
+  "smartsub-faster-whisper-runtime-windows-x64.tar.gz"
+  "smartsub-faster-whisper-runtime-macos-arm64.tar.gz"
+  "smartsub-faster-whisper-runtime-macos-x64.tar.gz"
+  "smartsub-faster-whisper-runtime-linux-x64.tar.gz"
   "manifest.json"
   "checksums.sha256"
 )

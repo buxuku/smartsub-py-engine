@@ -29,14 +29,10 @@ WORKDIR="${WORKDIR:-$REPO_ROOT/.gitcode-sync-tmp}"
 
 # 需要同步的产物（与 sync-gitcode-release.sh 的 SYNC_FILES 保持一致）
 FILES=(
-  "smartsub-faster-whisper-windows-x64.tar.gz"
-  "smartsub-faster-whisper-macos-arm64.tar.gz"
-  "smartsub-faster-whisper-macos-x64.tar.gz"
-  "smartsub-faster-whisper-linux-x64.tar.gz"
-  "smartsub-funasr-windows-x64.tar.gz"
-  "smartsub-funasr-macos-arm64.tar.gz"
-  "smartsub-funasr-macos-x64.tar.gz"
-  "smartsub-funasr-linux-x64.tar.gz"
+  "smartsub-faster-whisper-runtime-windows-x64.tar.gz"
+  "smartsub-faster-whisper-runtime-macos-arm64.tar.gz"
+  "smartsub-faster-whisper-runtime-macos-x64.tar.gz"
+  "smartsub-faster-whisper-runtime-linux-x64.tar.gz"
   "manifest.json"
   "checksums.sha256"
 )

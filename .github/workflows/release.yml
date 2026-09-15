@@ -44,7 +44,7 @@ jobs:
       # --only-binary=:all:（在 build_runtime_package.py 内）禁止 sdist 在 runner 源码编译，
       # 故 runner CPU 的指令集绝不会烘进产物（老 CPU 由 ct2/onnxruntime 运行时 ISA 派发兜底）。
       - name: Build self-contained runtime
-        run: uv run --python ${{ env.PYTHON_VERSION }} -- python build_runtime_package.py dist/runtime
+        run: uv run --python ${{ env.PYTHON_VERSION }} -- python build_runtime_package.py dist/runtime --platform-suffix ${{ matrix.target.artifact_suffix }}
 
       - name: Smoke test (package mode)
         shell: bash
@@ -69,7 +69,7 @@ jobs:
       # ---- Full GPU(CUDA12) 变体（仅 windows-x64 / linux-x64）：包名加 -cuda 后缀，不覆盖 CPU 包 ----
       - name: Build self-contained runtime (CUDA)
         if: matrix.target.gpu
-        run: uv run --python ${{ env.PYTHON_VERSION }} -- python build_runtime_package.py dist/runtime-cuda --variant cuda
+        run: uv run --python ${{ env.PYTHON_VERSION }} -- python build_runtime_package.py dist/runtime-cuda --variant cuda --platform-suffix ${{ matrix.target.artifact_suffix }}
 
       - name: Smoke test CUDA (package mode)
         if: matrix.target.gpu

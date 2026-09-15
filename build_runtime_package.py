@@ -114,6 +114,56 @@ def adhoc_sign(out: Path) -> None:
     print(f"ad-hoc signed {count} mach-o files")
 
 
+def get_platform_suffix() -> str:
+    if sys.platform == "darwin":
+        import platform
+        return "macos-arm64" if platform.machine() == "arm64" else "macos-x64"
+    elif sys.platform == "win32":
+        return "windows-x64"
+    elif sys.platform.startswith("linux"):
+        return "linux-x64"
+    return sys.platform
+
+
+def get_git_sha() -> str:
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout.strip()
+    except Exception:
+        return ""
+
+
+def write_manifest(out: Path, variant: str, platform_suffix: str) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    sys.path.insert(0, str(ROOT))
+    import _version
+
+    built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    manifest = {
+        "version": "latest",
+        "engineVersion": getattr(_version, "ENGINE_VERSION", "0.4.0"),
+        "protocolVersion": getattr(_version, "PROTOCOL_VERSION", 1),
+        "pythonAbi": "cp312",
+        "platform": platform_suffix,
+        "variant": variant,
+        "engineId": ENGINE_ID,
+        "builtAt": built_at,
+        "gitSha": get_git_sha(),
+    }
+    manifest_path = out / "manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"wrote package manifest to {manifest_path}: variant={variant}, platform={platform_suffix}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build self-contained faster-whisper runtime")
     parser.add_argument("out_dir", help="output runtime directory")
@@ -123,9 +173,15 @@ def main() -> None:
         default="cpu",
         help="cpu (default) or cuda (Full GPU: bundles NVIDIA cuBLAS/cuDNN)",
     )
+    parser.add_argument(
+        "--platform-suffix",
+        default=None,
+        help="Target platform suffix (e.g. windows-x64, macos-arm64). Defaults to auto-detect.",
+    )
     args = parser.parse_args()
     out = Path(args.out_dir)
     variant = args.variant
+    platform_suffix = args.platform_suffix or get_platform_suffix()
 
     # 1) PBS 基座拷入 OUT（copy + trim + drop config-*）
     base = uv_base_dir()
@@ -171,11 +227,15 @@ def main() -> None:
     for p in out.rglob("__pycache__"):
         shutil.rmtree(p, ignore_errors=True)
 
-    # 5) macOS 无证书兜底：对内嵌解释器 + wheel 原生库 ad-hoc 重签
+    # 5) 生成自描述 manifest.json，使解压产物自带版本与变体元数据
+    write_manifest(out, variant, platform_suffix)
+
+    # 6) macOS 无证书兜底：对内嵌解释器 + wheel 原生库 ad-hoc 重签
     adhoc_sign(out)
 
-    # 6) 断言 + 包模式 smoke（OUT 解释器 + PYTHONPATH=OUT/site-packages 跑 OUT/main.py）
+    # 7) 断言 + 包模式 smoke（OUT 解释器 + PYTHONPATH=OUT/site-packages 跑 OUT/main.py）
     assert (out / "main.py").is_file(), "main.py missing in runtime"
+    assert (out / "manifest.json").is_file(), "manifest.json missing in runtime"
     assert (site / ASSERT_PKG).is_dir(), f"{ASSERT_PKG} missing in site-packages"
     if variant == "cuda":
         assert (site / "nvidia").is_dir(), (
